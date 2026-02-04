@@ -50,6 +50,14 @@ Halt:
 	j	$31
 	.end Halt
 
+	.globl Abs
+	.ent	Abs
+Abs:
+	addiu $2,$0,SC_Abs
+	syscall
+	j 	$31
+	.end Abs
+
 	.globl Add
 	.ent	Add
 Add:

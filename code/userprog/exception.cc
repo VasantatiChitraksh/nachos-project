@@ -154,6 +154,20 @@ void handle_SC_Add() {
     return move_program_counter();
 }
 
+void handle_SC_Abs() {
+    DEBUG(dbgSys, "Abs " << kernel->machine->ReadRegister(4));
+
+    /* Process SysAdd Systemcall*/
+    int result;
+    result = SysAbs((int)kernel->machine->ReadRegister(4));
+
+    DEBUG(dbgSys, "Add returning with " << result << "\n");
+    /* Prepare Result */
+    kernel->machine->WriteRegister(2, (int)result);
+
+    return move_program_counter();
+}
+
 void handle_SC_ReadNum() {
     int result = SysReadNum();
     kernel->machine->WriteRegister(2, result);
@@ -419,6 +433,8 @@ void ExceptionHandler(ExceptionType which) {
             switch (type) {
                 case SC_Halt:
                     return handle_SC_Halt();
+                case SC_Abs:
+                    return handle_SC_Abs();
                 case SC_Add:
                     return handle_SC_Add();
                 case SC_ReadNum:
