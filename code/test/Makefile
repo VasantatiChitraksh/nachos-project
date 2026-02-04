@@ -106,7 +106,7 @@ AS = $(GCCDIR)as
 LD = $(GCCDIR)ld
 
 INCDIR =-I../userprog -I../lib
-CFLAGS = -G 0 -c $(INCDIR) -B../../../usr/local/nachos/lib/gcc-lib/decstation-ultrix/2.95.2/ -B../../../usr/local/nachos/decstation-ultrix/bin/
+CFLAGS = -G 0 -c $(INCDIR) -B../../usr/local/nachos/lib/gcc-lib/decstation-ultrix/2.95.2/ -B../../usr/local/nachos/decstation-ultrix/bin/
 
 ifeq ($(hosttype),unknown)
 PROGRAMS = unknownhost
