@@ -39,6 +39,7 @@ Thread::Thread(char *threadName, bool _has_dynamic_name /*=false*/) {
     stackTop = NULL;
     stack = NULL;
     status = JUST_CREATED;
+    priority = random() % 10000; // Assign a random priority to the thread
     for (int i = 0; i < MachineStateSize; i++) {
         machineState[i] = NULL;  // not strictly necessary, since
                                  // new thread ignores contents
@@ -200,9 +201,9 @@ void Thread::Yield() {
 
     DEBUG(dbgThread, "Yielding thread: " << name);
 
+    kernel->scheduler->ReadyToRun(this);
     nextThread = kernel->scheduler->FindNextToRun();
     if (nextThread != NULL) {
-        kernel->scheduler->ReadyToRun(this);
         kernel->scheduler->Run(nextThread, FALSE);
     }
     (void)kernel->interrupt->SetLevel(oldLevel);
@@ -389,7 +390,7 @@ static void SimpleThread(int which) {
     int num;
 
     for (num = 0; num < 5; num++) {
-        cout << "*** thread " << which << " looped " << num << " times\n";
+        cout << "*** thread " << which << " (Priority: " << kernel->currentThread->priority << ")" << " looped " << num << " times\n";
         kernel->currentThread->Yield();
     }
 }
@@ -402,10 +403,23 @@ static void SimpleThread(int which) {
 
 void Thread::SelfTest() {
     DEBUG(dbgThread, "Entering Thread::SelfTest");
+    cout << "--- Starting Priority Scheduler Test ---\n";
 
-    Thread *t = new Thread("forked thread");
+    Thread *t1 = new Thread("Thread 1");
+    t1->priority = 10; // Lowest priority
+    
+    Thread *t2 = new Thread("Thread 2");
+    t2->priority = 50; // Highest priority
+    
+    Thread *t3 = new Thread("Thread 3");
+    t3->priority = 30; // Middle priority
 
-    t->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
+    t1->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
+    t2->Fork((VoidFunctionPtr)SimpleThread, (void *)2);
+    t3->Fork((VoidFunctionPtr)SimpleThread, (void *)3);
+
+    cout << "Main thread yielding to let others run...\n";
     kernel->currentThread->Yield();
-    SimpleThread(0);
+    
+    cout << "--- Priority Scheduler Test Complete ---\n";
 }

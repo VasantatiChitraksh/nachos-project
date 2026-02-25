@@ -1,0 +1,530 @@
+diff --git a/code/test/add.c b/code/test/add.c
+index 70b6925..06135e4 100644
+--- a/code/test/add.c
++++ b/code/test/add.c
+@@ -12,6 +12,5 @@ int main() {
+ 
+     result = Add(42, 23);
+ 
+-    Halt();
+-    /* not reached */
++    return 0;
+ }
+diff --git a/code/threads/scheduler.cc b/code/threads/scheduler.cc
+index 1d52916..9802b96 100644
+--- a/code/threads/scheduler.cc
++++ b/code/threads/scheduler.cc
+@@ -29,8 +29,14 @@
+ //	Initially, no ready threads.
+ //----------------------------------------------------------------------
+ 
++static int ThreadCompare(Thread *a,Thread *b){
++    if(a->priority > b->prioirity) return -1;
++    else if(a->priority < b->priority) return 1;
++    else return 0;
++}
++
+ Scheduler::Scheduler() {
+-    readyList = new List<Thread *>;
++    readyList = new SortedList<Thread *>(ThreadCompare);
+     toBeDestroyed = NULL;
+ }
+ 
+diff --git a/code/threads/scheduler.h b/code/threads/scheduler.h
+index a96f228..911f0db 100644
+--- a/code/threads/scheduler.h
++++ b/code/threads/scheduler.h
+@@ -35,7 +35,7 @@ class Scheduler {
+     // SelfTest for scheduler is implemented in class Thread
+ 
+    private:
+-    List<Thread*>* readyList;  // queue of threads that are ready to run,
++    SortedList<Thread*>* readyList;  // queue of threads that are ready to run,
+                                // but not running
+     Thread* toBeDestroyed;     // finishing thread to be destroyed
+                                // by the next thread that runs
+diff --git a/code/threads/thread.cc b/code/threads/thread.cc
+index be9f7d6..799d284 100644
+--- a/code/threads/thread.cc
++++ b/code/threads/thread.cc
+@@ -39,6 +39,7 @@ Thread::Thread(char *threadName, bool _has_dynamic_name /*=false*/) {
+     stackTop = NULL;
+     stack = NULL;
+     status = JUST_CREATED;
++    priority = 0;
+     for (int i = 0; i < MachineStateSize; i++) {
+         machineState[i] = NULL;  // not strictly necessary, since
+                                  // new thread ignores contents
+diff --git a/code/threads/thread.h b/code/threads/thread.h
+index 3fbf156..3606e08 100644
+--- a/code/threads/thread.h
++++ b/code/threads/thread.h
+@@ -90,6 +90,7 @@ class Thread {
+     int processID;
+     int parrentID;
+     int exitStatus;
++    int priority; 
+     void FreeSpace() {
+         if (space != 0) delete space;
+     }
+@@ -107,6 +108,7 @@ class Thread {
+ 
+     void CheckOverflow();  // Check if thread stack has overflowed
+     void setStatus(ThreadStatus st) { status = st; }
++    void setPriority(int p) { priority = p; }
+     char *getName() { return (name); }
+     void Print() { cout << name; }
+     void SelfTest();  // test whether thread impl is working
+diff --git a/code/test/add.c b/code/test/add.c
+index 70b6925..06135e4 100644
+--- a/code/test/add.c
++++ b/code/test/add.c
+@@ -12,6 +12,5 @@ int main() {
+ 
+     result = Add(42, 23);
+ 
+-    Halt();
+-    /* not reached */
++    return 0;
+ }
+diff --git a/code/threads/scheduler.cc b/code/threads/scheduler.cc
+index 1d52916..9802b96 100644
+--- a/code/threads/scheduler.cc
++++ b/code/threads/scheduler.cc
+@@ -29,8 +29,14 @@
+ //	Initially, no ready threads.
+ //----------------------------------------------------------------------
+ 
++static int ThreadCompare(Thread *a,Thread *b){
++    if(a->priority > b->prioirity) return -1;
++    else if(a->priority < b->priority) return 1;
++    else return 0;
++}
++
+ Scheduler::Scheduler() {
+-    readyList = new List<Thread *>;
++    readyList = new SortedList<Thread *>(ThreadCompare);
+     toBeDestroyed = NULL;
+ }
+ 
+diff --git a/code/threads/scheduler.h b/code/threads/scheduler.h
+index a96f228..911f0db 100644
+--- a/code/threads/scheduler.h
++++ b/code/threads/scheduler.h
+@@ -35,7 +35,7 @@ class Scheduler {
+     // SelfTest for scheduler is implemented in class Thread
+ 
+    private:
+-    List<Thread*>* readyList;  // queue of threads that are ready to run,
++    SortedList<Thread*>* readyList;  // queue of threads that are ready to run,
+                                // but not running
+     Thread* toBeDestroyed;     // finishing thread to be destroyed
+                                // by the next thread that runs
+diff --git a/code/threads/thread.cc b/code/threads/thread.cc
+index be9f7d6..5b8b244 100644
+--- a/code/threads/thread.cc
++++ b/code/threads/thread.cc
+@@ -39,6 +39,7 @@ Thread::Thread(char *threadName, bool _has_dynamic_name /*=false*/) {
+     stackTop = NULL;
+     stack = NULL;
+     status = JUST_CREATED;
++    priority = 0;
+     for (int i = 0; i < MachineStateSize; i++) {
+         machineState[i] = NULL;  // not strictly necessary, since
+                                  // new thread ignores contents
+@@ -389,7 +390,7 @@ static void SimpleThread(int which) {
+     int num;
+ 
+     for (num = 0; num < 5; num++) {
+-        cout << "*** thread " << which << " looped " << num << " times\n";
++        cout << "*** thread " << which << " (Priority: " << kernel->currentThread->priority << ")" << " looped " << num << " times\n";
+         kernel->currentThread->Yield();
+     }
+ }
+@@ -402,10 +403,23 @@ static void SimpleThread(int which) {
+ 
+ void Thread::SelfTest() {
+     DEBUG(dbgThread, "Entering Thread::SelfTest");
+-
+-    Thread *t = new Thread("forked thread");
+-
+-    t->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
++    cout << "--- Starting Priority Scheduler Test ---\n";
++
++    Thread *t1 = new Thread("Thread 1");
++    t1->priority = 10; // Lowest priority
++    
++    Thread *t2 = new Thread("Thread 2");
++    t2->priority = 50; // Highest priority
++    
++    Thread *t3 = new Thread("Thread 3");
++    t3->priority = 30; // Middle priority
++
++    t1->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
++    t2->Fork((VoidFunctionPtr)SimpleThread, (void *)2);
++    t3->Fork((VoidFunctionPtr)SimpleThread, (void *)3);
++
++    cout << "Main thread yielding to let others run...\n";
+     kernel->currentThread->Yield();
+-    SimpleThread(0);
++    
++    cout << "--- Priority Scheduler Test Complete ---\n";
+ }
+diff --git a/code/threads/thread.h b/code/threads/thread.h
+index 3fbf156..3606e08 100644
+--- a/code/threads/thread.h
++++ b/code/threads/thread.h
+@@ -90,6 +90,7 @@ class Thread {
+     int processID;
+     int parrentID;
+     int exitStatus;
++    int priority; 
+     void FreeSpace() {
+         if (space != 0) delete space;
+     }
+@@ -107,6 +108,7 @@ class Thread {
+ 
+     void CheckOverflow();  // Check if thread stack has overflowed
+     void setStatus(ThreadStatus st) { status = st; }
++    void setPriority(int p) { priority = p; }
+     char *getName() { return (name); }
+     void Print() { cout << name; }
+     void SelfTest();  // test whether thread impl is working
+diff --git a/code/lib/list.h b/code/lib/list.h
+index 3ce9553..f4249a4 100644
+--- a/code/lib/list.h
++++ b/code/lib/list.h
+@@ -100,15 +100,14 @@ class SortedList : public List<T> {
+     void SanityCheck() const;  // has this list been corrupted?
+     void SelfTest(T *p, int numEntries);
+     // verify module is working
+-
+-   private:
+-    int (*compare)(T x, T y);  // function for sorting list elements
+-
+     void Prepend(T item) {
+         Insert(item);
+     }                                      // *pre*pending has no meaning
+                                            //	in a sorted list
+-    void Append(T item) { Insert(item); }  // neither does *ap*pend
++    void Append(T item) { Insert(item); } 
++
++   private:
++    int (*compare)(T x, T y);  // function for sorting list elements // neither does *ap*pend
+ };
+ 
+ // The following class can be used to step through a list.
+diff --git a/code/test/add.c b/code/test/add.c
+index 70b6925..06135e4 100644
+--- a/code/test/add.c
++++ b/code/test/add.c
+@@ -12,6 +12,5 @@ int main() {
+ 
+     result = Add(42, 23);
+ 
+-    Halt();
+-    /* not reached */
++    return 0;
+ }
+diff --git a/code/threads/scheduler.cc b/code/threads/scheduler.cc
+index 1d52916..39c88a0 100644
+--- a/code/threads/scheduler.cc
++++ b/code/threads/scheduler.cc
+@@ -29,8 +29,14 @@
+ //	Initially, no ready threads.
+ //----------------------------------------------------------------------
+ 
++static int ThreadCompare(Thread *a,Thread *b){
++    if(a->priority > b->priority) return -1;
++    else if(a->priority < b->priority) return 1;
++    else return 0;
++}
++
+ Scheduler::Scheduler() {
+-    readyList = new List<Thread *>;
++    readyList = new SortedList<Thread *>(ThreadCompare);
+     toBeDestroyed = NULL;
+ }
+ 
+diff --git a/code/threads/scheduler.h b/code/threads/scheduler.h
+index a96f228..911f0db 100644
+--- a/code/threads/scheduler.h
++++ b/code/threads/scheduler.h
+@@ -35,7 +35,7 @@ class Scheduler {
+     // SelfTest for scheduler is implemented in class Thread
+ 
+    private:
+-    List<Thread*>* readyList;  // queue of threads that are ready to run,
++    SortedList<Thread*>* readyList;  // queue of threads that are ready to run,
+                                // but not running
+     Thread* toBeDestroyed;     // finishing thread to be destroyed
+                                // by the next thread that runs
+diff --git a/code/threads/thread.cc b/code/threads/thread.cc
+index be9f7d6..5b8b244 100644
+--- a/code/threads/thread.cc
++++ b/code/threads/thread.cc
+@@ -39,6 +39,7 @@ Thread::Thread(char *threadName, bool _has_dynamic_name /*=false*/) {
+     stackTop = NULL;
+     stack = NULL;
+     status = JUST_CREATED;
++    priority = 0;
+     for (int i = 0; i < MachineStateSize; i++) {
+         machineState[i] = NULL;  // not strictly necessary, since
+                                  // new thread ignores contents
+@@ -389,7 +390,7 @@ static void SimpleThread(int which) {
+     int num;
+ 
+     for (num = 0; num < 5; num++) {
+-        cout << "*** thread " << which << " looped " << num << " times\n";
++        cout << "*** thread " << which << " (Priority: " << kernel->currentThread->priority << ")" << " looped " << num << " times\n";
+         kernel->currentThread->Yield();
+     }
+ }
+@@ -402,10 +403,23 @@ static void SimpleThread(int which) {
+ 
+ void Thread::SelfTest() {
+     DEBUG(dbgThread, "Entering Thread::SelfTest");
+-
+-    Thread *t = new Thread("forked thread");
+-
+-    t->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
++    cout << "--- Starting Priority Scheduler Test ---\n";
++
++    Thread *t1 = new Thread("Thread 1");
++    t1->priority = 10; // Lowest priority
++    
++    Thread *t2 = new Thread("Thread 2");
++    t2->priority = 50; // Highest priority
++    
++    Thread *t3 = new Thread("Thread 3");
++    t3->priority = 30; // Middle priority
++
++    t1->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
++    t2->Fork((VoidFunctionPtr)SimpleThread, (void *)2);
++    t3->Fork((VoidFunctionPtr)SimpleThread, (void *)3);
++
++    cout << "Main thread yielding to let others run...\n";
+     kernel->currentThread->Yield();
+-    SimpleThread(0);
++    
++    cout << "--- Priority Scheduler Test Complete ---\n";
+ }
+diff --git a/code/threads/thread.h b/code/threads/thread.h
+index 3fbf156..3606e08 100644
+--- a/code/threads/thread.h
++++ b/code/threads/thread.h
+@@ -90,6 +90,7 @@ class Thread {
+     int processID;
+     int parrentID;
+     int exitStatus;
++    int priority; 
+     void FreeSpace() {
+         if (space != 0) delete space;
+     }
+@@ -107,6 +108,7 @@ class Thread {
+ 
+     void CheckOverflow();  // Check if thread stack has overflowed
+     void setStatus(ThreadStatus st) { status = st; }
++    void setPriority(int p) { priority = p; }
+     char *getName() { return (name); }
+     void Print() { cout << name; }
+     void SelfTest();  // test whether thread impl is working
+diff --git a/code/lib/list.h b/code/lib/list.h
+index 3ce9553..f4249a4 100644
+--- a/code/lib/list.h
++++ b/code/lib/list.h
+@@ -100,15 +100,14 @@ class SortedList : public List<T> {
+     void SanityCheck() const;  // has this list been corrupted?
+     void SelfTest(T *p, int numEntries);
+     // verify module is working
+-
+-   private:
+-    int (*compare)(T x, T y);  // function for sorting list elements
+-
+     void Prepend(T item) {
+         Insert(item);
+     }                                      // *pre*pending has no meaning
+                                            //	in a sorted list
+-    void Append(T item) { Insert(item); }  // neither does *ap*pend
++    void Append(T item) { Insert(item); } 
++
++   private:
++    int (*compare)(T x, T y);  // function for sorting list elements // neither does *ap*pend
+ };
+ 
+ // The following class can be used to step through a list.
+diff --git a/code/test/Makefile b/code/test/Makefile
+index 257ec54..0a273e6 100644
+--- a/code/test/Makefile
++++ b/code/test/Makefile
+@@ -112,7 +112,7 @@ ifeq ($(hosttype),unknown)
+ PROGRAMS = unknownhost
+ else
+ # change this if you create a new test program!
+-PROGRAMS = abs add halt shell matmult sort segments test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main
++PROGRAMS = abs child add halt shell matmult sort segments test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main
+ endif
+ 
+ all: $(PROGRAMS)
+@@ -140,6 +140,13 @@ add: add.o start.o
+ 	$(LD) $(LDFLAGS) start.o add.o -o add.coff
+ 	$(COFF2NOFF) add.coff add
+ 
++child.o: child.c
++	$(CC) $(CFLAGS) -c child.c
++
++child: child.o start.o
++	$(LD) $(LDFLAGS) start.o child.o -o child.coff
++	$(COFF2NOFF) child.coff child
++	
+ shell.o: shell.c
+ 	$(CC) $(CFLAGS) -c shell.c
+ shell: shell.o start.o
+diff --git a/code/test/add.c b/code/test/add.c
+index 70b6925..06135e4 100644
+--- a/code/test/add.c
++++ b/code/test/add.c
+@@ -12,6 +12,5 @@ int main() {
+ 
+     result = Add(42, 23);
+ 
+-    Halt();
+-    /* not reached */
++    return 0;
+ }
+diff --git a/code/test/exec.c b/code/test/exec.c
+index feadac1..3ce2fed 100644
+--- a/code/test/exec.c
++++ b/code/test/exec.c
+@@ -8,10 +8,15 @@
+ 
+ int main() {
+     int pid;
+-    pid = Exec("num_io");
++    pid = Exec("child");
+     if (pid < 0) {
+         Write("Exec failed: ", 14, stdout);
+         PrintNum(pid);
+-    } else
++    } else{
++        int i;
++        for (i = 0; i < 10; i++){
++            Write("This is the parent thread.\n", 27, stdout);
++        }
+         Join(pid);
++    }
+ }
+diff --git a/code/threads/scheduler.cc b/code/threads/scheduler.cc
+index 1d52916..39c88a0 100644
+--- a/code/threads/scheduler.cc
++++ b/code/threads/scheduler.cc
+@@ -29,8 +29,14 @@
+ //	Initially, no ready threads.
+ //----------------------------------------------------------------------
+ 
++static int ThreadCompare(Thread *a,Thread *b){
++    if(a->priority > b->priority) return -1;
++    else if(a->priority < b->priority) return 1;
++    else return 0;
++}
++
+ Scheduler::Scheduler() {
+-    readyList = new List<Thread *>;
++    readyList = new SortedList<Thread *>(ThreadCompare);
+     toBeDestroyed = NULL;
+ }
+ 
+diff --git a/code/threads/scheduler.h b/code/threads/scheduler.h
+index a96f228..911f0db 100644
+--- a/code/threads/scheduler.h
++++ b/code/threads/scheduler.h
+@@ -35,7 +35,7 @@ class Scheduler {
+     // SelfTest for scheduler is implemented in class Thread
+ 
+    private:
+-    List<Thread*>* readyList;  // queue of threads that are ready to run,
++    SortedList<Thread*>* readyList;  // queue of threads that are ready to run,
+                                // but not running
+     Thread* toBeDestroyed;     // finishing thread to be destroyed
+                                // by the next thread that runs
+diff --git a/code/threads/thread.cc b/code/threads/thread.cc
+index be9f7d6..4020c77 100644
+--- a/code/threads/thread.cc
++++ b/code/threads/thread.cc
+@@ -39,6 +39,7 @@ Thread::Thread(char *threadName, bool _has_dynamic_name /*=false*/) {
+     stackTop = NULL;
+     stack = NULL;
+     status = JUST_CREATED;
++    priority = random() % 10000; // Assign a random priority to the thread
+     for (int i = 0; i < MachineStateSize; i++) {
+         machineState[i] = NULL;  // not strictly necessary, since
+                                  // new thread ignores contents
+@@ -200,9 +201,9 @@ void Thread::Yield() {
+ 
+     DEBUG(dbgThread, "Yielding thread: " << name);
+ 
++    kernel->scheduler->ReadyToRun(this);
+     nextThread = kernel->scheduler->FindNextToRun();
+     if (nextThread != NULL) {
+-        kernel->scheduler->ReadyToRun(this);
+         kernel->scheduler->Run(nextThread, FALSE);
+     }
+     (void)kernel->interrupt->SetLevel(oldLevel);
+@@ -389,7 +390,7 @@ static void SimpleThread(int which) {
+     int num;
+ 
+     for (num = 0; num < 5; num++) {
+-        cout << "*** thread " << which << " looped " << num << " times\n";
++        cout << "*** thread " << which << " (Priority: " << kernel->currentThread->priority << ")" << " looped " << num << " times\n";
+         kernel->currentThread->Yield();
+     }
+ }
+@@ -402,10 +403,23 @@ static void SimpleThread(int which) {
+ 
+ void Thread::SelfTest() {
+     DEBUG(dbgThread, "Entering Thread::SelfTest");
+-
+-    Thread *t = new Thread("forked thread");
+-
+-    t->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
++    cout << "--- Starting Priority Scheduler Test ---\n";
++
++    Thread *t1 = new Thread("Thread 1");
++    t1->priority = 10; // Lowest priority
++    
++    Thread *t2 = new Thread("Thread 2");
++    t2->priority = 50; // Highest priority
++    
++    Thread *t3 = new Thread("Thread 3");
++    t3->priority = 30; // Middle priority
++
++    t1->Fork((VoidFunctionPtr)SimpleThread, (void *)1);
++    t2->Fork((VoidFunctionPtr)SimpleThread, (void *)2);
++    t3->Fork((VoidFunctionPtr)SimpleThread, (void *)3);
++
++    cout << "Main thread yielding to let others run...\n";
+     kernel->currentThread->Yield();
+-    SimpleThread(0);
++    
++    cout << "--- Priority Scheduler Test Complete ---\n";
+ }
+diff --git a/code/threads/thread.h b/code/threads/thread.h
+index 3fbf156..3606e08 100644
+--- a/code/threads/thread.h
++++ b/code/threads/thread.h
+@@ -90,6 +90,7 @@ class Thread {
+     int processID;
+     int parrentID;
+     int exitStatus;
++    int priority; 
+     void FreeSpace() {
+         if (space != 0) delete space;
+     }
+@@ -107,6 +108,7 @@ class Thread {
+ 
+     void CheckOverflow();  // Check if thread stack has overflowed
+     void setStatus(ThreadStatus st) { status = st; }
++    void setPriority(int p) { priority = p; }
+     char *getName() { return (name); }
+     void Print() { cout << name; }
+     void SelfTest();  // test whether thread impl is working

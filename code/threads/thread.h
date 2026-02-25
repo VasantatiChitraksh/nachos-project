@@ -90,6 +90,7 @@ class Thread {
     int processID;
     int parrentID;
     int exitStatus;
+    int priority; 
     void FreeSpace() {
         if (space != 0) delete space;
     }
@@ -107,6 +108,7 @@ class Thread {
 
     void CheckOverflow();  // Check if thread stack has overflowed
     void setStatus(ThreadStatus st) { status = st; }
+    void setPriority(int p) { priority = p; }
     char *getName() { return (name); }
     void Print() { cout << name; }
     void SelfTest();  // test whether thread impl is working
