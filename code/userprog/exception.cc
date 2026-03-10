@@ -408,6 +408,13 @@ void handle_SC_GetPid() {
     return move_program_counter();
 }
 
+void handle_SC_Sleep() {
+    int time = kernel->machine->ReadRegister(4);
+    SysSleep(time);
+    move_program_counter();
+    return;
+}
+
 void ExceptionHandler(ExceptionType which) {
     int type = kernel->machine->ReadRegister(2);
 
@@ -492,6 +499,8 @@ void ExceptionHandler(ExceptionType which) {
                 case SC_ThreadExit:
                 case SC_ThreadJoin:
                     return handle_not_implemented_SC(type);
+                case SC_Sleep:
+                    return handle_SC_Sleep();
 
                 default:
                     cerr << "Unexpected system call " << type << "\n";

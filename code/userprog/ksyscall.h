@@ -195,6 +195,14 @@ int SysSeek(int seekPos, int fileId) {
     return kernel->fileSystem->Seek(seekPos, fileId);
 }
 
+void SysSleep(int time){
+    if(time <= 0){
+        return;
+    }
+    int waketime = kernel->stats->totalTicks + time;
+    kernel->scheduler->putToSleep(kernel->currentThread,waketime);
+}
+
 int SysExec(char* name) {
     // cerr << "call: `" << name  << "`"<< endl;
     OpenFile* oFile = kernel->fileSystem->Open(name);

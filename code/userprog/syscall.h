@@ -49,6 +49,7 @@
 #define SC_Signal 53
 #define SC_GetPid 54
 #define SC_Abs 55
+#define SC_Sleep 57
 
 #ifndef IN_ASM
 
@@ -212,6 +213,8 @@ int ThreadJoin(ThreadId id);
 void ThreadExit(int ExitCode);
 
 unsigned int Abs(int num);
+
+void Sleep(int time);
 
 #endif /* IN_ASM */
 

@@ -1,0 +1,461 @@
+diff --git a/code/machine/interrupt.cc b/code/machine/interrupt.cc
+index 4ed8291..0a8cf1a 100644
+--- a/code/machine/interrupt.cc
++++ b/code/machine/interrupt.cc
+@@ -158,6 +158,11 @@ void Interrupt::OneTick() {
+                                  // (interrupt handlers run with
+                                  // interrupts disabled)
+     CheckIfDue(FALSE);           // check for pending interrupts
++    bool someThreadWoken = kernel->scheduler->checkSleepQueue();
++    if(someThreadWoken){
++        yieldOnReturn = TRUE;
++        DEBUG(dbgInt, "Some thread(s) woke up from sleep.");
++    }
+     ChangeLevel(IntOff, IntOn);  // re-enable interrupts
+     if (yieldOnReturn) {         // if the timer device handler asked
+                                  // for a context switch, ok to do it now
+diff --git a/code/test/Makefile b/code/test/Makefile
+index 0a273e6..8c2a5d1 100644
+--- a/code/test/Makefile
++++ b/code/test/Makefile
+@@ -112,7 +112,7 @@ ifeq ($(hosttype),unknown)
+ PROGRAMS = unknownhost
+ else
+ # change this if you create a new test program!
+-PROGRAMS = abs child add halt shell matmult sort segments test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main
++PROGRAMS = abs child add halt shell matmult sort segments sleep_test test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main
+ endif
+ 
+ all: $(PROGRAMS)
+@@ -165,6 +165,12 @@ segments: segments.o start.o
+ 	$(LD) $(LDFLAGS) start.o segments.o -o segments.coff
+ 	$(COFF2NOFF) segments.coff segments
+ 
++sleep_test.o: sleep_test.c
++	$(CC) $(CFLAGS) -c sleep_test.c
++sleep_test: sleep_test.o start.o
++	$(LD) $(LDFLAGS) start.o sleep_test.o -o sleep_test.coff
++	$(COFF2NOFF) sleep_test.coff sleep_test
++
+ matmult.o: matmult.c
+ 	$(CC) $(CFLAGS) -c matmult.c
+ matmult: matmult.o start.o
+diff --git a/code/test/start.S b/code/test/start.S
+index 50c7232..dcc89df 100644
+--- a/code/test/start.S
++++ b/code/test/start.S
+@@ -154,6 +154,13 @@ Seek:
+ 	j	$31
+ 	.end Seek
+ 
++	.globl Sleep
++	.ent	Sleep
++Sleep:
++	addiu $2,$0,SC_Sleep
++	j	$31
++	.end Sleep
++
+         .globl ThreadFork
+         .ent    ThreadFork
+ ThreadFork:
+diff --git a/code/threads/scheduler.cc b/code/threads/scheduler.cc
+index 39c88a0..ebe1dc1 100644
+--- a/code/threads/scheduler.cc
++++ b/code/threads/scheduler.cc
+@@ -29,6 +29,14 @@
+ //	Initially, no ready threads.
+ //----------------------------------------------------------------------
+ 
++class WakeUpCallback : public CallBackObj {
++    public:
++        void CallBack() {
++            // We don't actually need to do anything here because 
++            // OneTick() handles checkSleepQueue() for us!
++        }
++};
++
+ static int ThreadCompare(Thread *a,Thread *b){
+     if(a->priority > b->priority) return -1;
+     else if(a->priority < b->priority) return 1;
+@@ -37,6 +45,7 @@ static int ThreadCompare(Thread *a,Thread *b){
+ 
+ Scheduler::Scheduler() {
+     readyList = new SortedList<Thread *>(ThreadCompare);
++    sleepQueue = new List<SleepingThread*>;
+     toBeDestroyed = NULL;
+ }
+ 
+@@ -170,3 +179,40 @@ void Scheduler::Print() {
+     cout << "Ready list contents:\n";
+     readyList->Apply(ThreadPrint);
+ }
++
++void Scheduler::putToSleep(Thread* thread,int wakeTime){
++    IntStatus oldLevel = kernel->interrupt->SetLevel(IntOff);
++    SleepingThread* st = new SleepingThread(thread,wakeTime);
++    sleepQueue->Append(st);
++    WakeUpCallback* alarm = new WakeUpCallback();
++    kernel->interrupt->Schedule(alarm, wakeTime - kernel->stats->totalTicks, TimerInt);
++    thread->Sleep(false);
++    kernel->interrupt->SetLevel(oldLevel);
++}
++
++bool Scheduler::checkSleepQueue(){
++    bool threadWoken = false;
++    bool found;
++
++    do{
++        found = false;
++        ListIterator<SleepingThread*>* itr = new ListIterator<SleepingThread*>(sleepQueue);
++
++        for(; !itr->IsDone(); itr->Next()){
++            SleepingThread* st = itr->Item();
++            if(st->waketime <= kernel->stats->totalTicks){
++                sleepQueue->Remove(st);
++                ReadyToRun(st->sleepthread);
++                delete st;
++
++                found = true;
++                threadWoken = true;
++                break;
++            }
++        }
++        delete itr;
++    }while(found);
++
++    return threadWoken;
++}
++
+diff --git a/code/threads/scheduler.h b/code/threads/scheduler.h
+index 911f0db..41d1c7d 100644
+--- a/code/threads/scheduler.h
++++ b/code/threads/scheduler.h
+@@ -16,6 +16,15 @@
+ // The following class defines the scheduler/dispatcher abstraction --
+ // the data structures and operations needed to keep track of which
+ // thread is running, and which threads are ready but not running.
++class SleepingThread{
++      public:
++         SleepingThread(Thread* thread, int wakeTime){
++            sleepthread = thread;
++            waketime = wakeTime;
++         }
++         Thread* sleepthread;
++         int waketime;
++};
+ 
+ class Scheduler {
+    public:
+@@ -33,10 +42,13 @@ class Scheduler {
+     void Print();               // Print contents of ready list
+ 
+     // SelfTest for scheduler is implemented in class Thread
++    void putToSleep(Thread* thread,int wakeTime);
++    bool checkSleepQueue();
+ 
+    private:
+     SortedList<Thread*>* readyList;  // queue of threads that are ready to run,
+                                // but not running
++    List<SleepingThread*>* sleepQueue; // list of threads that are sleeping
+     Thread* toBeDestroyed;     // finishing thread to be destroyed
+                                // by the next thread that runs
+ };
+diff --git a/code/userprog/exception.cc b/code/userprog/exception.cc
+index c7a9d26..2b8f84c 100644
+--- a/code/userprog/exception.cc
++++ b/code/userprog/exception.cc
+@@ -408,6 +408,13 @@ void handle_SC_GetPid() {
+     return move_program_counter();
+ }
+ 
++void handle_SC_Sleep() {
++    int time = kernel->machine->ReadRegister(4);
++    SysSleep(time);
++    move_program_counter();
++    return;
++}
++
+ void ExceptionHandler(ExceptionType which) {
+     int type = kernel->machine->ReadRegister(2);
+ 
+@@ -492,6 +499,8 @@ void ExceptionHandler(ExceptionType which) {
+                 case SC_ThreadExit:
+                 case SC_ThreadJoin:
+                     return handle_not_implemented_SC(type);
++                case SC_Sleep:
++                    return handle_SC_Sleep();
+ 
+                 default:
+                     cerr << "Unexpected system call " << type << "\n";
+diff --git a/code/userprog/ksyscall.h b/code/userprog/ksyscall.h
+index 4bb5ee8..e7de43f 100644
+--- a/code/userprog/ksyscall.h
++++ b/code/userprog/ksyscall.h
+@@ -195,6 +195,16 @@ int SysSeek(int seekPos, int fileId) {
+     return kernel->fileSystem->Seek(seekPos, fileId);
+ }
+ 
++void SysSleep(int time){
++    cout << "--> KERNEL RECEIVED SLEEP REQUEST FOR: " << time << " TICKS\n";
++    if(time <= 0){
++        return;
++    }
++    cout << "--> KERNEL RECEIVED SLEEP REQUEST FOR: " << time << " TICKS\n";
++    int waketime = kernel->stats->totalTicks + time;
++    kernel->scheduler->putToSleep(kernel->currentThread,waketime);
++}
++
+ int SysExec(char* name) {
+     // cerr << "call: `" << name  << "`"<< endl;
+     OpenFile* oFile = kernel->fileSystem->Open(name);
+diff --git a/code/userprog/syscall.h b/code/userprog/syscall.h
+index f7a4cfb..936a6cf 100644
+--- a/code/userprog/syscall.h
++++ b/code/userprog/syscall.h
+@@ -49,6 +49,7 @@
+ #define SC_Signal 53
+ #define SC_GetPid 54
+ #define SC_Abs 55
++#define SC_Sleep 57
+ 
+ #ifndef IN_ASM
+ 
+@@ -213,6 +214,8 @@ void ThreadExit(int ExitCode);
+ 
+ unsigned int Abs(int num);
+ 
++void Sleep(int time);
++
+ #endif /* IN_ASM */
+ 
+ #endif /* SYSCALL_H */
+diff --git a/code/machine/interrupt.cc b/code/machine/interrupt.cc
+index 4ed8291..0a8cf1a 100644
+--- a/code/machine/interrupt.cc
++++ b/code/machine/interrupt.cc
+@@ -158,6 +158,11 @@ void Interrupt::OneTick() {
+                                  // (interrupt handlers run with
+                                  // interrupts disabled)
+     CheckIfDue(FALSE);           // check for pending interrupts
++    bool someThreadWoken = kernel->scheduler->checkSleepQueue();
++    if(someThreadWoken){
++        yieldOnReturn = TRUE;
++        DEBUG(dbgInt, "Some thread(s) woke up from sleep.");
++    }
+     ChangeLevel(IntOff, IntOn);  // re-enable interrupts
+     if (yieldOnReturn) {         // if the timer device handler asked
+                                  // for a context switch, ok to do it now
+diff --git a/code/test/Makefile b/code/test/Makefile
+index 0a273e6..8c2a5d1 100644
+--- a/code/test/Makefile
++++ b/code/test/Makefile
+@@ -112,7 +112,7 @@ ifeq ($(hosttype),unknown)
+ PROGRAMS = unknownhost
+ else
+ # change this if you create a new test program!
+-PROGRAMS = abs child add halt shell matmult sort segments test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main
++PROGRAMS = abs child add halt shell matmult sort segments sleep_test test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main
+ endif
+ 
+ all: $(PROGRAMS)
+@@ -165,6 +165,12 @@ segments: segments.o start.o
+ 	$(LD) $(LDFLAGS) start.o segments.o -o segments.coff
+ 	$(COFF2NOFF) segments.coff segments
+ 
++sleep_test.o: sleep_test.c
++	$(CC) $(CFLAGS) -c sleep_test.c
++sleep_test: sleep_test.o start.o
++	$(LD) $(LDFLAGS) start.o sleep_test.o -o sleep_test.coff
++	$(COFF2NOFF) sleep_test.coff sleep_test
++
+ matmult.o: matmult.c
+ 	$(CC) $(CFLAGS) -c matmult.c
+ matmult: matmult.o start.o
+diff --git a/code/test/start.S b/code/test/start.S
+index 50c7232..2c68430 100644
+--- a/code/test/start.S
++++ b/code/test/start.S
+@@ -154,6 +154,14 @@ Seek:
+ 	j	$31
+ 	.end Seek
+ 
++	.globl Sleep
++	.ent	Sleep
++Sleep:
++	addiu $2,$0,SC_Sleep
++	syscall
++	j	$31
++	.end Sleep
++
+         .globl ThreadFork
+         .ent    ThreadFork
+ ThreadFork:
+diff --git a/code/threads/scheduler.cc b/code/threads/scheduler.cc
+index 39c88a0..0da3f26 100644
+--- a/code/threads/scheduler.cc
++++ b/code/threads/scheduler.cc
+@@ -29,6 +29,14 @@
+ //	Initially, no ready threads.
+ //----------------------------------------------------------------------
+ 
++class WakeUpCallback : public CallBackObj {
++    public:
++        void CallBack() {
++            // We don't actually need to do anything here because 
++            kernel->scheduler->checkSleepQueue();
++        }
++};
++
+ static int ThreadCompare(Thread *a,Thread *b){
+     if(a->priority > b->priority) return -1;
+     else if(a->priority < b->priority) return 1;
+@@ -37,6 +45,7 @@ static int ThreadCompare(Thread *a,Thread *b){
+ 
+ Scheduler::Scheduler() {
+     readyList = new SortedList<Thread *>(ThreadCompare);
++    sleepQueue = new List<SleepingThread*>;
+     toBeDestroyed = NULL;
+ }
+ 
+@@ -170,3 +179,40 @@ void Scheduler::Print() {
+     cout << "Ready list contents:\n";
+     readyList->Apply(ThreadPrint);
+ }
++
++void Scheduler::putToSleep(Thread* thread,int wakeTime){
++    IntStatus oldLevel = kernel->interrupt->SetLevel(IntOff);
++    SleepingThread* st = new SleepingThread(thread,wakeTime);
++    sleepQueue->Append(st);
++    WakeUpCallback* alarm = new WakeUpCallback();
++    kernel->interrupt->Schedule(alarm, wakeTime - kernel->stats->totalTicks, TimerInt);
++    thread->Sleep(false);
++    kernel->interrupt->SetLevel(oldLevel);
++}
++
++bool Scheduler::checkSleepQueue(){
++    bool threadWoken = false;
++    bool found;
++
++    do{
++        found = false;
++        ListIterator<SleepingThread*>* itr = new ListIterator<SleepingThread*>(sleepQueue);
++
++        for(; !itr->IsDone(); itr->Next()){
++            SleepingThread* st = itr->Item();
++            if(st->waketime <= kernel->stats->totalTicks){
++                sleepQueue->Remove(st);
++                ReadyToRun(st->sleepthread);
++                delete st;
++
++                found = true;
++                threadWoken = true;
++                break;
++            }
++        }
++        delete itr;
++    }while(found);
++
++    return threadWoken;
++}
++
+diff --git a/code/threads/scheduler.h b/code/threads/scheduler.h
+index 911f0db..41d1c7d 100644
+--- a/code/threads/scheduler.h
++++ b/code/threads/scheduler.h
+@@ -16,6 +16,15 @@
+ // The following class defines the scheduler/dispatcher abstraction --
+ // the data structures and operations needed to keep track of which
+ // thread is running, and which threads are ready but not running.
++class SleepingThread{
++      public:
++         SleepingThread(Thread* thread, int wakeTime){
++            sleepthread = thread;
++            waketime = wakeTime;
++         }
++         Thread* sleepthread;
++         int waketime;
++};
+ 
+ class Scheduler {
+    public:
+@@ -33,10 +42,13 @@ class Scheduler {
+     void Print();               // Print contents of ready list
+ 
+     // SelfTest for scheduler is implemented in class Thread
++    void putToSleep(Thread* thread,int wakeTime);
++    bool checkSleepQueue();
+ 
+    private:
+     SortedList<Thread*>* readyList;  // queue of threads that are ready to run,
+                                // but not running
++    List<SleepingThread*>* sleepQueue; // list of threads that are sleeping
+     Thread* toBeDestroyed;     // finishing thread to be destroyed
+                                // by the next thread that runs
+ };
+diff --git a/code/userprog/exception.cc b/code/userprog/exception.cc
+index c7a9d26..2b8f84c 100644
+--- a/code/userprog/exception.cc
++++ b/code/userprog/exception.cc
+@@ -408,6 +408,13 @@ void handle_SC_GetPid() {
+     return move_program_counter();
+ }
+ 
++void handle_SC_Sleep() {
++    int time = kernel->machine->ReadRegister(4);
++    SysSleep(time);
++    move_program_counter();
++    return;
++}
++
+ void ExceptionHandler(ExceptionType which) {
+     int type = kernel->machine->ReadRegister(2);
+ 
+@@ -492,6 +499,8 @@ void ExceptionHandler(ExceptionType which) {
+                 case SC_ThreadExit:
+                 case SC_ThreadJoin:
+                     return handle_not_implemented_SC(type);
++                case SC_Sleep:
++                    return handle_SC_Sleep();
+ 
+                 default:
+                     cerr << "Unexpected system call " << type << "\n";
+diff --git a/code/userprog/ksyscall.h b/code/userprog/ksyscall.h
+index 4bb5ee8..683ad47 100644
+--- a/code/userprog/ksyscall.h
++++ b/code/userprog/ksyscall.h
+@@ -195,6 +195,14 @@ int SysSeek(int seekPos, int fileId) {
+     return kernel->fileSystem->Seek(seekPos, fileId);
+ }
+ 
++void SysSleep(int time){
++    if(time <= 0){
++        return;
++    }
++    int waketime = kernel->stats->totalTicks + time;
++    kernel->scheduler->putToSleep(kernel->currentThread,waketime);
++}
++
+ int SysExec(char* name) {
+     // cerr << "call: `" << name  << "`"<< endl;
+     OpenFile* oFile = kernel->fileSystem->Open(name);
+diff --git a/code/userprog/syscall.h b/code/userprog/syscall.h
+index f7a4cfb..936a6cf 100644
+--- a/code/userprog/syscall.h
++++ b/code/userprog/syscall.h
+@@ -49,6 +49,7 @@
+ #define SC_Signal 53
+ #define SC_GetPid 54
+ #define SC_Abs 55
++#define SC_Sleep 57
+ 
+ #ifndef IN_ASM
+ 
+@@ -213,6 +214,8 @@ void ThreadExit(int ExitCode);
+ 
+ unsigned int Abs(int num);
+ 
++void Sleep(int time);
++
+ #endif /* IN_ASM */
+ 
+ #endif /* SYSCALL_H */

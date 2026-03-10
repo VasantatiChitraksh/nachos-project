@@ -154,6 +154,14 @@ Seek:
 	j	$31
 	.end Seek
 
+	.globl Sleep
+	.ent	Sleep
+Sleep:
+	addiu $2,$0,SC_Sleep
+	syscall
+	j	$31
+	.end Sleep
+
         .globl ThreadFork
         .ent    ThreadFork
 ThreadFork:

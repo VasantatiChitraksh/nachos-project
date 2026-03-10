@@ -29,6 +29,14 @@
 //	Initially, no ready threads.
 //----------------------------------------------------------------------
 
+class WakeUpCallback : public CallBackObj {
+    public:
+        void CallBack() {
+            // We don't actually need to do anything here because 
+            kernel->scheduler->checkSleepQueue();
+        }
+};
+
 static int ThreadCompare(Thread *a,Thread *b){
     if(a->priority > b->priority) return -1;
     else if(a->priority < b->priority) return 1;
@@ -37,6 +45,7 @@ static int ThreadCompare(Thread *a,Thread *b){
 
 Scheduler::Scheduler() {
     readyList = new SortedList<Thread *>(ThreadCompare);
+    sleepQueue = new List<SleepingThread*>;
     toBeDestroyed = NULL;
 }
 
@@ -170,3 +179,40 @@ void Scheduler::Print() {
     cout << "Ready list contents:\n";
     readyList->Apply(ThreadPrint);
 }
+
+void Scheduler::putToSleep(Thread* thread,int wakeTime){
+    IntStatus oldLevel = kernel->interrupt->SetLevel(IntOff);
+    SleepingThread* st = new SleepingThread(thread,wakeTime);
+    sleepQueue->Append(st);
+    WakeUpCallback* alarm = new WakeUpCallback();
+    kernel->interrupt->Schedule(alarm, wakeTime - kernel->stats->totalTicks, TimerInt);
+    thread->Sleep(false);
+    kernel->interrupt->SetLevel(oldLevel);
+}
+
+bool Scheduler::checkSleepQueue(){
+    bool threadWoken = false;
+    bool found;
+
+    do{
+        found = false;
+        ListIterator<SleepingThread*>* itr = new ListIterator<SleepingThread*>(sleepQueue);
+
+        for(; !itr->IsDone(); itr->Next()){
+            SleepingThread* st = itr->Item();
+            if(st->waketime <= kernel->stats->totalTicks){
+                sleepQueue->Remove(st);
+                ReadyToRun(st->sleepthread);
+                delete st;
+
+                found = true;
+                threadWoken = true;
+                break;
+            }
+        }
+        delete itr;
+    }while(found);
+
+    return threadWoken;
+}
+
