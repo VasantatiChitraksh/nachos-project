@@ -28,6 +28,7 @@ class Semaphore;
 #include "bitmap.h"
 #include "stable.h"
 #include "ptable.h"
+#include "pipe.h"
 
 class Kernel {
    public:
@@ -61,6 +62,8 @@ class Kernel {
     FileSystem *fileSystem;
     PostOfficeInput *postOfficeIn;
     PostOfficeOutput *postOfficeOut;
+
+    PipeDescriptors *pipeDes;
 
     Semaphore *addrLock;
     Bitmap *gPhysPageBitMap;

@@ -48,6 +48,20 @@ void StartProcess_2(void* pid) {
                     // by doing the syscall "exit"
 }
 
+int PCB::Exec(char* filename, int id, int pDes) {
+    multex->P();
+    this->thread = new Thread(filename, pDes, true); // Use overloaded thread
+    if (this->thread == NULL) {
+        multex->V();
+        return -1;
+    }
+    this->thread->processID = id;
+    this->parentID = kernel->currentThread->processID;
+    this->thread->Fork(StartProcess_2, &this->thread->processID);
+    multex->V();
+    return id;
+}
+
 int PCB::Exec(char* filename, int id) {
     // cerr << filename << ' ' << pid << endl;
     multex->P();

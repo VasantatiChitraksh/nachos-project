@@ -82,6 +82,7 @@ class Thread {
    public:
     Thread(char *debugName,
            bool _has_dynamic_name = false);  // initialize a Thread
+    Thread(char *debugName, int pDes, bool _has_dynamic_name = false);
     ~Thread();                               // deallocate a Thread
                                              // NOTE -- thread being deleted
                                              // must not be running when delete
@@ -89,6 +90,7 @@ class Thread {
 
     int processID;
     int parrentID;
+    int pipeDesNum;
     int exitStatus;
     int priority; 
     void FreeSpace() {
