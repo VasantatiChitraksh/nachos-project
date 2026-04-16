@@ -488,6 +488,84 @@ void handle_SC_Sleep() {
     return;
 }
 
+#ifdef USE_TLB
+// ============================================================
+// TLB Management
+// ============================================================
+
+static int nextTLBSlot = 0;
+
+// Performance counters
+static int gTLBMissCount        = 0;
+static int gTLBReplaceCount     = 0;
+static int gTLBInvalidFillCount = 0;
+
+// Choose a TLB slot to evict: prefer invalid slots, then Round-Robin.
+static int SelectTLBVictim() {
+    for (int i = 0; i < TLBSize; i++) {
+        if (!kernel->machine->tlb[i].valid) {
+            gTLBInvalidFillCount++;
+            return i;
+        }
+    }
+    int victim = nextTLBSlot;
+    nextTLBSlot = (nextTLBSlot + 1) % TLBSize;
+    gTLBReplaceCount++;
+    return victim;
+}
+
+// Write use/dirty bits of a TLB entry back to the software page table.
+static void SaveBackTLBEntry(int slot) {
+    TranslationEntry &tlbEntry = kernel->machine->tlb[slot];
+    if (!tlbEntry.valid) return;
+    TranslationEntry *pte =
+        kernel->currentThread->space->FindPTE(tlbEntry.virtualPage);
+    if (pte != NULL) {
+        pte->use   |= tlbEntry.use;
+        pte->dirty |= tlbEntry.dirty;
+    }
+}
+
+// Handle a TLB miss:
+//   1. Get the faulting virtual address.
+//   2. Look up the VPN in the process page table.
+//   3. If the page is not yet in physical memory, demand-load it.
+//   4. Install the PTE into the TLB (evicting an entry if needed).
+// Returns true on success, false if a genuine (unrecoverable) page fault.
+static bool HandleTLBMiss() {
+    gTLBMissCount++;
+
+    int faultAddr = kernel->machine->ReadRegister(BadVAddrReg);
+    int vpn = faultAddr / PageSize;
+
+    // Look up the page table entry.
+    TranslationEntry *pte =
+        kernel->currentThread->space->FindPTE(vpn);
+    if (pte == NULL) {
+        // VPN is out of range -- real address error.
+        return false;
+    }
+
+    // If the page is not yet in physical memory, demand-load it.
+    if (!pte->valid) {
+        kernel->currentThread->space->LoadPage(faultAddr);
+        // Re-fetch: LoadPage sets valid and physicalPage.
+        pte = kernel->currentThread->space->FindPTE(vpn);
+        if (pte == NULL || !pte->valid) return false;
+    }
+
+    // Pick a TLB slot, saving back the entry we are about to evict.
+    int slot = SelectTLBVictim();
+    SaveBackTLBEntry(slot);
+
+    // Install the PTE into the chosen TLB slot.
+    kernel->machine->tlb[slot] = *pte;
+    kernel->machine->tlb[slot].valid = TRUE;
+
+    return true;  // retry the faulting instruction
+}
+#endif  // USE_TLB
+
 void ExceptionHandler(ExceptionType which) {
     int type = kernel->machine->ReadRegister(2);
 
@@ -499,13 +577,15 @@ void ExceptionHandler(ExceptionType which) {
             DEBUG(dbgSys, "Switch to system mode\n");
             break;
         case PageFaultException:
-        {
-            int faultingAddr = kernel->machine->ReadRegister(BadVAddrReg);
-            cout << "=== Got a Page fault at the address: " << faultingAddr << " ===" << endl;
-            kernel->currentThread->space->LoadPage(faultingAddr);
-            kernel->currentThread->space->RestoreState();
-            return;
-        }
+#ifdef USE_TLB
+            if (HandleTLBMiss()) {
+                return;  // retry the instruction -- do NOT advance PC!
+            }
+#endif
+            cerr << "Page fault at virtual address "
+                 << kernel->machine->ReadRegister(BadVAddrReg) << "\n";
+            SysHalt();
+            ASSERTNOTREACHED();
         case ReadOnlyException:
         case BusErrorException:
         case AddressErrorException:

@@ -32,12 +32,18 @@ class AddrSpace {
 
     void SaveState();     // Save/restore address space-specific
     void RestoreState();  // info on a context switch
-    void LoadPage(int vaddr);
+   //  void LoadPage(int vaddr);
 
     // Translate virtual address _vaddr_
     // to physical address _paddr_. _mode_
     // is 0 for Read, 1 for Write.
     ExceptionType Translate(unsigned int vaddr, unsigned int *paddr, int mode);
+    int NumPages() const {return numPages;}
+    TranslationEntry* GetPageTable() const {return pageTable;}
+    TranslationEntry* FindPTE(int vpn);
+    void LoadPage(int vaddr);
+    void SaveTLBState();
+    void ClearTLB();
     // void InitRegisters();
    private:
     TranslationEntry *pageTable;  // Assume linear page table translation
