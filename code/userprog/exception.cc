@@ -488,6 +488,13 @@ void handle_SC_Sleep() {
     return;
 }
 
+void handle_SC_Sbrk(){
+    int increment = kernel->machine->ReadRegister(4);
+    int result = kernel->currentThread->space->sbrk(increment);
+    kernel->machine->WriteRegister(2,result);
+    return move_program_counter();
+}
+
 #ifdef USE_TLB
 // ============================================================
 // TLB Management
@@ -671,6 +678,8 @@ void ExceptionHandler(ExceptionType which) {
                 case SC_ThreadExit:
                 case SC_ThreadJoin:
                     return handle_not_implemented_SC(type);
+                case SC_Sbrk:
+                    return handle_SC_Sbrk();
                 case SC_Sleep:
                     return handle_SC_Sleep();
 

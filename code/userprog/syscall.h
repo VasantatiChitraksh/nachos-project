@@ -56,6 +56,7 @@
 #define SC_ExecP 61
 #define SC_ReadInt 62
 #define SC_GetPD 63
+#define SC_Sbrk  64
 
 #ifndef IN_ASM
 
@@ -230,6 +231,12 @@ void ThreadExit(int ExitCode);
 unsigned int Abs(int num);
 
 void Sleep(int time);
+
+/* Extend (or shrink) the heap by increment bytes.
+ * Returns the previous heap break (i.e., the start of the new region),
+ * or -1 on error (heap-stack collision).
+ */
+int Sbrk(int increment);
 
 #endif /* IN_ASM */
 

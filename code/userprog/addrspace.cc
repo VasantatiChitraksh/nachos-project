@@ -127,10 +127,38 @@ AddrSpace::AddrSpace(char *fileName) {
     kernel->addrLock->P();
     // how big is address space?
     size = noffH.code.size + noffH.initData.size + noffH.uninitData.size +
-           UserStackSize;  // we need to increase the size
+           UserStackSize + UserHeapSize;  // we need to increase the size
                            // to leave room for the stack
     numPages = divRoundUp(size, PageSize);
     size = numPages * PageSize;
+
+    /* Place the heap start AFTER the highest virtual extent of all segments,
+     * rounded up to a page boundary.  Simply summing sizes is wrong when
+     * rdata introduces a gap between .text and .data in virtual memory. */
+    {
+        /* Only include a segment in the heap-start calculation if its
+         * size is non-zero; coff2noff may leave virtualAddr uninitialized
+         * for zero-size segments (e.g., an empty .bss). */
+        unsigned int dataEnd = 0;
+        if (noffH.code.size > 0)
+            dataEnd = noffH.code.virtualAddr + noffH.code.size;
+#ifdef RDATA
+        if (noffH.readonlyData.size > 0) {
+            unsigned int end = noffH.readonlyData.virtualAddr + noffH.readonlyData.size;
+            if (end > dataEnd) dataEnd = end;
+        }
+#endif
+        if (noffH.initData.size > 0) {
+            unsigned int end = noffH.initData.virtualAddr + noffH.initData.size;
+            if (end > dataEnd) dataEnd = end;
+        }
+        if (noffH.uninitData.size > 0) {
+            unsigned int end = noffH.uninitData.virtualAddr + noffH.uninitData.size;
+            if (end > dataEnd) dataEnd = end;
+        }
+        this->heapTop   = divRoundUp(dataEnd, PageSize) * PageSize;
+        this->heapStart = this->heapTop;
+    }
 
     ASSERT(numPages <= NumPhysPages);  // check we're not trying
                                        // to run anything too big --
@@ -197,6 +225,19 @@ AddrSpace::AddrSpace(char *fileName) {
 //      the address space
 //
 //----------------------------------------------------------------------
+
+int AddrSpace::sbrk(int increment){
+    int oldHeapTop = heapTop;
+    unsigned int stackBottom = numPages*PageSize - UserStackSize;
+
+    if(heapTop + increment > stackBottom){
+        DEBUG(dbgAddr,"Sbrk: heap-stack collision!");
+        return -1;
+    }
+
+    heapTop+=increment;
+    return oldHeapTop;
+}
 
 void AddrSpace::Execute() {
     kernel->currentThread->space = this;

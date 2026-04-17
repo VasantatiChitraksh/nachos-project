@@ -344,3 +344,11 @@ GetPid:
 __main:
         j       $31
         .end    __main
+
+    .globl Sbrk
+    .ent    Sbrk
+Sbrk:
+    addiu $2,$0,SC_Sbrk
+    syscall
+    j       $31
+    .end Sbrk

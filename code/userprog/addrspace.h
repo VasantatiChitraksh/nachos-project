@@ -18,6 +18,7 @@
 #include "noff.h"
 
 #define UserStackSize 1024  // increase this as necessary!
+#define UserHeapSize 2048
 
 class AddrSpace {
    public:
@@ -44,6 +45,8 @@ class AddrSpace {
     void LoadPage(int vaddr);
     void SaveTLBState();
     void ClearTLB();
+
+    int sbrk(int increment);
     // void InitRegisters();
    private:
     TranslationEntry *pageTable;  // Assume linear page table translation
@@ -57,6 +60,8 @@ class AddrSpace {
 
     void InitRegisters();  // Initialize user-level CPU registers,
                            // before jumping to user code
+    unsigned int heapStart;
+    unsigned int heapTop;
 };
 
 #endif  // ADDRSPACE_H

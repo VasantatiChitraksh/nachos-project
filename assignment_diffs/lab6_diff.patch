@@ -1,0 +1,191 @@
+diff --git a/code/test/Makefile b/code/test/Makefile
+index 7fcfc10..ef3bd8b 100644
+--- a/code/test/Makefile
++++ b/code/test/Makefile
+@@ -112,7 +112,7 @@ ifeq ($(hosttype),unknown)
+ PROGRAMS = unknownhost
+ else
+ # change this if you create a new test program!
+-PROGRAMS = abs child add halt shell matmult sort segments sleep_test test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main pipe_parent pipe_child tlb_test
++PROGRAMS = abs child add halt shell matmult sort segments sleep_test test_syscall num_io char_io random str_io ascii bubblesort help create_file open_file readwrite exec test_sem sinhvien voinuoc main pipe_parent pipe_child tlb_test malloc_test
+ endif
+ 
+ all: $(PROGRAMS)
+@@ -291,6 +291,14 @@ tlb_test: tlb_test.o start.o
+ 	$(LD) $(LDFLAGS) start.o tlb_test.o -o tlb_test.coff
+ 	$(COFF2NOFF) tlb_test.coff tlb_test
+ 
++malloc.o: malloc.c
++	$(CC) $(CFLAGS) -c malloc.c
++malloc_test.o: malloc_test.c
++	$(CC) $(CFLAGS) -c malloc_test.c
++malloc_test: malloc_test.o malloc.o start.o
++	$(LD) $(LDFLAGS) start.o malloc.o malloc_test.o -o malloc_test.coff
++	$(COFF2NOFF) malloc_test.coff malloc_test
++
+ clean:
+ 	$(RM) -f *.o *.ii
+ 	$(RM) -f *.coff
+diff --git a/code/test/start.S b/code/test/start.S
+index 3d11aa9..1418ff3 100644
+--- a/code/test/start.S
++++ b/code/test/start.S
+@@ -344,3 +344,11 @@ GetPid:
+ __main:
+         j       $31
+         .end    __main
++
++    .globl Sbrk
++    .ent    Sbrk
++Sbrk:
++    addiu $2,$0,SC_Sbrk
++    syscall
++    j       $31
++    .end Sbrk
+diff --git a/code/userprog/addrspace.cc b/code/userprog/addrspace.cc
+index 88c76c1..ee1735e 100644
+--- a/code/userprog/addrspace.cc
++++ b/code/userprog/addrspace.cc
+@@ -127,11 +127,39 @@ AddrSpace::AddrSpace(char *fileName) {
+     kernel->addrLock->P();
+     // how big is address space?
+     size = noffH.code.size + noffH.initData.size + noffH.uninitData.size +
+-           UserStackSize;  // we need to increase the size
++           UserStackSize + UserHeapSize;  // we need to increase the size
+                            // to leave room for the stack
+     numPages = divRoundUp(size, PageSize);
+     size = numPages * PageSize;
+ 
++    /* Place the heap start AFTER the highest virtual extent of all segments,
++     * rounded up to a page boundary.  Simply summing sizes is wrong when
++     * rdata introduces a gap between .text and .data in virtual memory. */
++    {
++        /* Only include a segment in the heap-start calculation if its
++         * size is non-zero; coff2noff may leave virtualAddr uninitialized
++         * for zero-size segments (e.g., an empty .bss). */
++        unsigned int dataEnd = 0;
++        if (noffH.code.size > 0)
++            dataEnd = noffH.code.virtualAddr + noffH.code.size;
++#ifdef RDATA
++        if (noffH.readonlyData.size > 0) {
++            unsigned int end = noffH.readonlyData.virtualAddr + noffH.readonlyData.size;
++            if (end > dataEnd) dataEnd = end;
++        }
++#endif
++        if (noffH.initData.size > 0) {
++            unsigned int end = noffH.initData.virtualAddr + noffH.initData.size;
++            if (end > dataEnd) dataEnd = end;
++        }
++        if (noffH.uninitData.size > 0) {
++            unsigned int end = noffH.uninitData.virtualAddr + noffH.uninitData.size;
++            if (end > dataEnd) dataEnd = end;
++        }
++        this->heapTop   = divRoundUp(dataEnd, PageSize) * PageSize;
++        this->heapStart = this->heapTop;
++    }
++
+     ASSERT(numPages <= NumPhysPages);  // check we're not trying
+                                        // to run anything too big --
+                                        // at least until we have
+@@ -198,6 +226,19 @@ AddrSpace::AddrSpace(char *fileName) {
+ //
+ //----------------------------------------------------------------------
+ 
++int AddrSpace::sbrk(int increment){
++    int oldHeapTop = heapTop;
++    unsigned int stackBottom = numPages*PageSize - UserStackSize;
++
++    if(heapTop + increment > stackBottom){
++        DEBUG(dbgAddr,"Sbrk: heap-stack collision!");
++        return -1;
++    }
++
++    heapTop+=increment;
++    return oldHeapTop;
++}
++
+ void AddrSpace::Execute() {
+     kernel->currentThread->space = this;
+ 
+diff --git a/code/userprog/addrspace.h b/code/userprog/addrspace.h
+index c9fe5c7..fe4c2a9 100644
+--- a/code/userprog/addrspace.h
++++ b/code/userprog/addrspace.h
+@@ -18,6 +18,7 @@
+ #include "noff.h"
+ 
+ #define UserStackSize 1024  // increase this as necessary!
++#define UserHeapSize 2048
+ 
+ class AddrSpace {
+    public:
+@@ -44,6 +45,8 @@ class AddrSpace {
+     void LoadPage(int vaddr);
+     void SaveTLBState();
+     void ClearTLB();
++
++    int sbrk(int increment);
+     // void InitRegisters();
+    private:
+     TranslationEntry *pageTable;  // Assume linear page table translation
+@@ -57,6 +60,8 @@ class AddrSpace {
+ 
+     void InitRegisters();  // Initialize user-level CPU registers,
+                            // before jumping to user code
++    unsigned int heapStart;
++    unsigned int heapTop;
+ };
+ 
+ #endif  // ADDRSPACE_H
+diff --git a/code/userprog/exception.cc b/code/userprog/exception.cc
+index 762750c..3e30491 100644
+--- a/code/userprog/exception.cc
++++ b/code/userprog/exception.cc
+@@ -488,6 +488,13 @@ void handle_SC_Sleep() {
+     return;
+ }
+ 
++void handle_SC_Sbrk(){
++    int increment = kernel->machine->ReadRegister(4);
++    int result = kernel->currentThread->space->sbrk(increment);
++    kernel->machine->WriteRegister(2,result);
++    return move_program_counter();
++}
++
+ #ifdef USE_TLB
+ // ============================================================
+ // TLB Management
+@@ -671,6 +678,8 @@ void ExceptionHandler(ExceptionType which) {
+                 case SC_ThreadExit:
+                 case SC_ThreadJoin:
+                     return handle_not_implemented_SC(type);
++                case SC_Sbrk:
++                    return handle_SC_Sbrk();
+                 case SC_Sleep:
+                     return handle_SC_Sleep();
+ 
+diff --git a/code/userprog/syscall.h b/code/userprog/syscall.h
+index fc9b230..51c1c0b 100644
+--- a/code/userprog/syscall.h
++++ b/code/userprog/syscall.h
+@@ -56,6 +56,7 @@
+ #define SC_ExecP 61
+ #define SC_ReadInt 62
+ #define SC_GetPD 63
++#define SC_Sbrk  64
+ 
+ #ifndef IN_ASM
+ 
+@@ -231,6 +232,12 @@ unsigned int Abs(int num);
+ 
+ void Sleep(int time);
+ 
++/* Extend (or shrink) the heap by increment bytes.
++ * Returns the previous heap break (i.e., the start of the new region),
++ * or -1 on error (heap-stack collision).
++ */
++int Sbrk(int increment);
++
+ #endif /* IN_ASM */
+ 
+ #endif /* SYSCALL_H */
